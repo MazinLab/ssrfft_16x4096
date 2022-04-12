@@ -3,7 +3,7 @@
 %    File Name:             ssrfft_testbench.m
 %    Type:                  Matlab Script
 %    Author:                J. Smith
-%    Updated:               Fri Feb 2020
+%    Updated:               Tue Apr 2022
 % 
 %    Description:           Produce and format test data and compare 
 %                           MATLAB software FFT output with Xilinx SSR FFT
@@ -31,10 +31,17 @@ snr = 30;               % signal-to-noise ratio
 a_noise = 10^((20*log10(a_sig_1/sqrt(2)) - snr)/10);
 in_noise = sqrt(a_noise)*randn(1,N);
 
-% complex data
-in_complex = a_sig_1*exp(1i*2*pi*f_sig_1*t) + in_noise;
-real_sig = real(in_complex);
-imag_sig = imag(in_complex);
+% complex data (Generate like RFSoC ADC)
+in_complex = a_sig_1*exp(1i*2*pi*f_sig_1*t); % + in_noise;
+max_val = max(max(real(in_complex)), max(imag(in_complex)));
+in_complex_scaled = (in_complex/max_val)*2047; % quantize to signed, 12_0
+in_complex_fi = fi(in_complex_scaled,1,16,0); % pack as signed, 16_0
+in_complex_packed = bitsll(in_complex_fi,4); % leftshift 4
+in_complex_packed = in_complex_packed*2.7636e-04; % multiply by filter gain
+
+% convert back to double for sim
+real_sig = double(real(in_complex_packed));
+imag_sig = double(imag(in_complex_packed));
 
 %% DATA PROCESSED VIA MATLAB FFT (SOFTWARE) %%
 
@@ -55,16 +62,16 @@ xlabel('Frequency (MHz)')
 
 %% DATA PROCESSED VIA SSR FFT (FPGA SIMULATION) %%
 
-samp_t = numerictype(1, 16, 15); % each sample is an signed 16_15 fixed point object 
+samp_t = numerictype(1, 16, 11); % each sample is an signed 16_11 fixed point object 
 iq_t   = numerictype(0, 32, 0);  % iq value is an unsigned 32_0 fixed point object 
 
 % input to simulation (first column is time vec, next SSR columns are ufix32_0 IQ objects)
 len_arr  = N/SSR;
 sim_time = linspace(0,len_arr-1,len_arr)';
 imag_arr = reshape(imag_sig,SSR,len_arr).';    % double
-imag_arr_fi = fi(imag_arr, samp_t);            % signed 16_15
+imag_arr_fi = fi(imag_arr, samp_t);            % signed 16_11
 real_arr    = reshape(real_sig,SSR,len_arr).'; % double
-real_arr_fi = fi(real_arr, samp_t);            % signed 16_15
+real_arr_fi = fi(real_arr, samp_t);            % signed 16_11
 
 IQ = bitconcat(imag_arr_fi, real_arr_fi); % concat QI and cast as ufix32_0 (real = I imag = Q)
 iqin.signals.values = IQ;                 % make into a struct
@@ -81,7 +88,7 @@ iq_out32_0 = fi(iq_out, iq_t);                % recreate fixed point object
 q_out_fi   = bitsliceget(iq_out32_0, 32, 17); % slice out high q bits
 i_out_fi   = bitsliceget(iq_out32_0, 16, 1);  % slice out low i bits
 
-i_out_fi = reinterpretcast(i_out_fi, samp_t); % recast to approproate signed 16_15 dtype
+i_out_fi = reinterpretcast(i_out_fi, samp_t); % recast to approproate signed 16_11 dtype
 q_out_fi = reinterpretcast(q_out_fi, samp_t);
 
 i_out = double(i_out_fi);                     % convert to normal dtype (double) for computational convinience 
